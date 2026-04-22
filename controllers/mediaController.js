@@ -669,6 +669,147 @@ export const uploadTopicMedia = async (req, res) => {
   }
 };
 
+export const getTopicMediaByTopic = async (req, res) => {
+  try {
+    const { topic_id } = req.body;  // ✅ FIXED
+
+    console.log("📥 Fetch media for topic_id:", topic_id);
+
+    if (!topic_id) {
+      return res.status(400).json({
+        success: false,
+        message: "topic_id is required",
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT 
+        id,
+        topic_id,
+        title,
+        description,
+        file_path,
+        file_name,
+        mime_type,
+        file_size,
+        created_at
+       FROM tbl_topic_media
+       WHERE topic_id = $1
+       ORDER BY created_at DESC`,
+      [topic_id]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Topic media fetched successfully",
+      count: result.rows.length,
+      data: result.rows.map((item) => ({
+        ...item,
+        file_url: item.file_path,
+      })),
+    });
+
+  } catch (error) {
+    console.error("❌ Fetch error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const updateTopicMedia = async (req, res) => {
+  try {
+    const { id, title, description } = req.body;
+
+    console.log("📥 Update request:", { id, title, description });
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "id is required",
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE tbl_topic_media
+       SET 
+         title = $1,
+         description = $2
+       WHERE id = $3
+       RETURNING *`,
+      [
+        title || null,
+        description || null,
+        id
+      ]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Media updated successfully",
+      data: result.rows[0],
+    });
+
+  } catch (error) {
+    console.error("❌ Update error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
+export const deleteTopicMedia = async (req, res) => {
+  try {
+    const { id } = req.body;
+
+    console.log("🗑️ Delete request for id:", id);
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "id is required",
+      });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM tbl_topic_media
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Media deleted from database successfully",
+      data: result.rows[0],
+    });
+
+  } catch (error) {
+    console.error("❌ Delete error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 export const getTopicMedia = async (req, res) => {
   try {
     const { topic_id } = req.body;
@@ -712,6 +853,48 @@ export const getTopicMedia = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch topic media",
+    });
+  }
+};
+
+export const getTopicsByStandard = async (req, res) => {
+  try {
+    const { standard_id } = req.body;
+
+    if (!standard_id) {
+      return res.status(400).json({
+        success: false,
+        message: "standard_id is required",
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT 
+        id,
+        topic_name,
+        topic_description,
+        level,
+        category,
+        is_active,
+        standard_id,
+        standard_name,
+        created_at
+       FROM public.tbl_astrology_topics   -- ✅ FIXED NAME
+       WHERE standard_id = $1
+       ORDER BY created_at DESC`,
+      [standard_id]
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result.rows,
+    });
+
+  } catch (error) {
+    console.error("❌ Fetch topics error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
     });
   }
 };
@@ -785,6 +968,83 @@ export const assignTopicAndMediaToSlot = async (req, res) => {
     });
   } finally {
     client.release();
+  }
+};
+
+export const getAssignedDataByBatch = async (req, res) => {
+  try {
+    const { batch_code } = req.body;
+
+    if (!batch_code) {
+      return res.status(400).json({
+        success: false,
+        message: "batch_code is required",
+      });
+    }
+
+   const result = await pool.query(
+  `
+  SELECT
+    cs.id AS slot_id,
+    cs.class_date,
+    cs.schedule_id,
+
+    -- ✅ FIXED column
+    cs.slot_range,
+
+    cs.class_link,
+    cs.topic_id,
+    t.topic_name,
+
+    COALESCE(
+      json_agg(
+        DISTINCT jsonb_build_object(
+          'media_id', tm.id,
+          'title', tm.title,
+          'file_path', tm.file_path
+        )
+      ) FILTER (WHERE tm.id IS NOT NULL),
+      '[]'
+    ) AS media
+
+  FROM tbl_class_slots cs
+
+  LEFT JOIN tbl_astrology_topics t
+    ON t.id = cs.topic_id
+
+  LEFT JOIN tbl_class_slot_media sm
+    ON sm.slot_id = cs.id
+
+  LEFT JOIN tbl_topic_media tm
+    ON tm.id = sm.media_id::INTEGER
+
+  WHERE cs.batch_code = $1
+
+  GROUP BY
+    cs.id,
+    cs.class_date,
+    cs.schedule_id,
+    cs.slot_range,
+    cs.class_link,
+    cs.topic_id,
+    t.topic_name
+
+  ORDER BY cs.class_date, cs.id
+  `,
+  [batch_code]
+);
+
+    return res.status(200).json({
+      success: true,
+      data: result.rows,
+    });
+
+  } catch (error) {
+    console.error("❌ getAssignedDataByBatch error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch assigned data",
+    });
   }
 };
 

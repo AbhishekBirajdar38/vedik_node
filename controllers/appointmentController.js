@@ -21,25 +21,20 @@ export const bookAppointment = async (req, res) => {
       gender,
       marital_status,
       is_twins,
-
       appointment_type,
       consultation_mode,
-
       date_of_birth,
       time_of_birth,
       country,
       state,
       city,
       subjects,
-
       source,
       friend_name,
-
       transaction_id,
       appointment_date,
       slot_range,
-
-      partner_details, // ✅ ARRAY NOW
+      partner_details,
     } = req.body;
 
     /* ================= VALIDATIONS ================= */
@@ -68,9 +63,13 @@ export const bookAppointment = async (req, res) => {
     const createdBy = req.user?.user_code || "SYSTEM";
     const createdAt = DateTime.now().setZone("Asia/Kolkata").toISO();
 
-    /* ==============================
-       STEP 1: CHECK & BOOK SLOT
-    =============================== */
+    /* ================= DATE FIX ================= */
+
+    // ✅ IMPORTANT: remove any timezone part
+    const safeAppointmentDate = appointment_date.split("T")[0];
+    const safeDob = date_of_birth ? date_of_birth.split("T")[0] : null;
+
+    /* ================= SLOT BOOK ================= */
 
     const slotResult = await pool.query(
       `UPDATE tbl_slots
@@ -82,7 +81,7 @@ export const bookAppointment = async (req, res) => {
          AND is_active = TRUE
          AND is_booked = FALSE
        RETURNING id`,
-      [createdBy, appointment_date, slot_range],
+      [createdBy, safeAppointmentDate, slot_range],
     );
 
     if (slotResult.rowCount === 0) {
@@ -92,41 +91,30 @@ export const bookAppointment = async (req, res) => {
       });
     }
 
-    /* ==============================
-       STEP 2: GENERATE APPOINTMENT CODE
-    =============================== */
+    /* ================= GENERATE CODE ================= */
 
     const lastIdResult = await pool.query(
       `SELECT id FROM tbl_appointments ORDER BY id DESC LIMIT 1`,
     );
 
     const lastId = lastIdResult.rows.length ? lastIdResult.rows[0].id : 0;
-
     const appointment_code = generateAppointmentCode(lastId);
 
-    /* ==============================
-       STEP 3: CREATE APPOINTMENT
-    =============================== */
+    /* ================= INSERT ================= */
 
     const insertQuery = `
       INSERT INTO tbl_appointments (
         appointment_code,
         name, email, mobile_number, gender, marital_status, is_twins,
-
         appointment_type, consultation_mode,
-
         date_of_birth, time_of_birth,
         country, state, city,
-
         subjects,
         source, friend_name,
-
         transaction_id,
         appointment_date,
         slot_range,
-
-        partner_details, -- ✅ JSONB COLUMN
-
+        partner_details,
         is_appointment_conducted,
         appointment_status,
         created_by,
@@ -159,26 +147,20 @@ export const bookAppointment = async (req, res) => {
       gender,
       marital_status,
       is_twins,
-
       appointment_type,
       consultation_mode || null,
-
-      date_of_birth || null,
+      safeDob,
       time_of_birth || null,
       country,
       state,
       city,
-
       subjects,
       source,
       friend_name || null,
-
       transaction_id,
-      appointment_date,
+      safeAppointmentDate, // ✅ FIXED
       slot_range,
-
-      JSON.stringify(partner_details || []), // ✅ MULTIPLE PARTNERS
-
+      JSON.stringify(partner_details || []),
       false,
       "pending",
       createdBy,
@@ -187,160 +169,63 @@ export const bookAppointment = async (req, res) => {
 
     const result = await pool.query(insertQuery, values);
 
-    /* ==============================
-   STEP 4: SEND EMAILS
-============================== */
+    /* ================= EMAIL FORMAT FIX ================= */
+
+    const formatDateToDDMMYYYY = (dateStr) => {
+      if (!dateStr) return "N/A";
+
+      // ✅ NO new Date() → no timezone issue
+      const [year, month, day] = dateStr.split("-");
+      return `${day}/${month}/${year}`;
+    };
+
+    const formattedAppointmentDate =
+      formatDateToDDMMYYYY(safeAppointmentDate);
+    const formattedDob = formatDateToDDMMYYYY(safeDob);
+
+    /* ================= EMAIL ================= */
 
     try {
       const adminEmail = "mrunal@vedikastrologer.com";
 
-      // ==============================
-      // 📅 FORMAT DATE TO DD/MM/YYYY
-      // ==============================
-      const formatDateToDDMMYYYY = (dateStr) => {
-        if (!dateStr) return "N/A";
-
-        const date = new Date(dateStr);
-
-        const day = String(date.getDate()).padStart(2, "0");
-        const month = String(date.getMonth() + 1).padStart(2, "0");
-        const year = date.getFullYear(); // full year
-
-        return `${day}/${month}/${year}`;
-      };
-
-      const formattedAppointmentDate = formatDateToDDMMYYYY(appointment_date);
-      const formattedDob = formatDateToDDMMYYYY(date_of_birth);
-
-      // ==============================
-      // 🔹 Build Partner Details HTML
-      // ==============================
       let partnerHtml = "";
 
       if (partner_details && partner_details.length > 0) {
         partner_details.forEach((partner, index) => {
-          partnerHtml += `  
-        <hr/>
-        <h4>Partner ${index + 1} (${partner.relation_type || "N/A"})</h4>
-        <p><strong>Name :</strong> ${partner.name || "N/A"}</p>
-        <p><strong>Date of Birth :</strong> ${formatDateToDDMMYYYY(partner.date_of_birth)}</p>
-        <p><strong>Time of Birth :</strong> ${partner.time_of_birth || "N/A"}</p>
-        <p><strong>Place of Birth :</strong> ${partner.place_of_birth || "N/A"}</p>
-      `;
+          partnerHtml += `
+            <hr/>
+            <h4>Partner ${index + 1}</h4>
+            <p><strong>Name :</strong> ${partner.name || "N/A"}</p>
+            <p><strong>Date of Birth :</strong> ${formatDateToDDMMYYYY(partner.date_of_birth)}</p>
+            <p><strong>Time of Birth :</strong> ${partner.time_of_birth || "N/A"}</p>
+            <p><strong>Place :</strong> ${partner.place_of_birth || "N/A"}</p>
+          `;
         });
       }
 
-      // ======================
-      // 📩 ADMIN EMAIL
-      // ======================
-
       await sendMail(
         adminEmail,
-        "New Appointment - Vedik Astrologer",
+        "New Appointment",
         `
-  <div style="font-family: Arial, sans-serif; background:#f4f4f4; padding:20px;">
-    <h2 style="margin-bottom:15px;">New Appointment</h2>
-
-    <table width="100%" cellpadding="10" cellspacing="0" 
-           style="background:#ffffff; border:1px solid #cccccc; border-collapse:collapse;">
-      <tr>
-        <td width="100%" style="vertical-align:top;">
-
-          <p><strong>Appointment Date :</strong> ${formattedAppointmentDate}</p>
-          <p><strong>Time :</strong> ${slot_range}</p>
-          <p><strong>Appointment Type :</strong> ${appointment_type}</p>
-          <p><strong>Consultation Mode :</strong> ${consultation_mode || "Offline"}</p>
-
-          <hr/>
-
-          <p><strong>Customer Name :</strong> ${name}</p>
-          <p><strong>Contact Number :</strong> ${mobile_number}</p>
-          <p><strong>Email Id :</strong> ${email}</p>
-          <p><strong>Gender :</strong> ${gender || "N/A"}</p>
-          <p><strong>Marital Status :</strong> ${marital_status || "N/A"}</p>
-          <p><strong>Are you one of the twins :</strong> ${is_twins ? "Yes" : "No"}</p>
-          <p><strong>Source :</strong> ${source || "N/A"}</p>
-          <p><strong>Friend Name :</strong> ${friend_name || "N/A"}</p>
-
-          <hr/>
-
-          <p><strong>Date of Birth :</strong> ${formattedDob}</p>
-          <p><strong>Time Of Birth :</strong> ${time_of_birth || "N/A"}</p>
-          <p><strong>Place Of Birth :</strong> ${city || ""}, ${state || ""}, ${country || ""}</p>
-
-          <p><strong>Subjects :</strong> ${(subjects || []).join(", ")}</p>
-
-          ${partnerHtml}
-
-          <p><strong>Transaction Id :</strong> ${transaction_id || "N/A"}</p>
-
-          <br/>
-          <p>Thanks,<br/>Jyotishi Mrunal Kulkarni</p>
-
-        </td>
-      </tr>
-    </table>
-  </div>
-  `,
+        <p><strong>Date:</strong> ${formattedAppointmentDate}</p>
+        <p><strong>Time:</strong> ${slot_range}</p>
+        <p><strong>Name:</strong> ${name}</p>
+        ${partnerHtml}
+        `
       );
-
-      // ======================
-      // 📩 CUSTOMER EMAIL
-      // ======================
 
       await sendMail(
-        email?.trim(),
-        "Appointment Confirmation - Vedik Astrologer",
+        email,
+        "Appointment Confirmed",
         `
-  <div style="font-family: Arial, sans-serif; background:#f5f5f5; padding:30px;">
-    
-    <div style="max-width:600px; margin:0 auto; background:#ffffff; padding:30px; border-radius:6px;">
-      
-      <h1 style="margin-top:0; color:#000;">Vedik Astrologer</h1>
-
-      <p>Hi ${name},</p>
-
-      <p>
-        Thank you for booking with us! Your appointment request has been accepted.
-      </p>
-
-      <p>
-        We're looking forward to seeing you. 
-      </p>
-
-      <p style="margin-top:25px;"><strong>Here's what you booked</strong></p>
-
-      <p><strong>Date:</strong> ${formattedAppointmentDate}</p>
-      <p><strong>Time:</strong> ${slot_range}</p>
-      <p>
-        <strong>Appointment Type:</strong> 
-        ${appointment_type} ${consultation_mode ? " - " + consultation_mode : ""}
-      </p>
-
-      <div style="margin-top:60px;">
-        <a href="http://localhost:4200/customer-appointment?code=${appointment_code}"
-           style="
-             background:#ffe600;
-             color:#000;
-             padding:12px 20px;
-             text-decoration:none;
-             border-radius:5px;
-             font-weight:bold;
-             display:inline-block;
-           ">
-          Reschedule
-        </a>
-      </div>
-      <br/>
-      <p>Thanks,<br/>Jyotishi Mrunal Kulkarni</p>
-
-    </div>
-  </div>
-  `,
-        "mrunal@vedikastrologer.com",
+        <p>Your appointment is booked.</p>
+        <p>Date: ${formattedAppointmentDate}</p>
+        <p>Time: ${slot_range}</p>
+        `
       );
+
     } catch (mailError) {
-      console.error("Email sending failed:", mailError);
+      console.error("Email error:", mailError);
     }
 
     return res.status(201).json({
@@ -348,12 +233,12 @@ export const bookAppointment = async (req, res) => {
       message: "Appointment booked successfully",
       appointment_code: result.rows[0].appointment_code,
     });
+
   } catch (error) {
     console.error("Error booking appointment:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
-      error: error.message,
     });
   }
 };

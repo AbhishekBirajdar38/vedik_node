@@ -1473,21 +1473,21 @@ const getStandards = async (req, res) => {
 
 export const getScheduleForAdmin = async (req, res) => {
   try {
-
-   const result = await pool.query(`
-  SELECT 
-    "batch_code",
-    "batch_name",
-    "class_name",
-    "topic",
-    "day_name",
-    "start_time",
-    "end_time",
-    "from_date",
-    "to_date"
-  FROM tbl_class_schedule
-  ORDER BY "from_date" ASC
-`);
+    const result = await pool.query(`
+      SELECT 
+        id,                 -- ✅ REQUIRED for delete
+        batch_code,
+        batch_name,
+        class_name,
+        topic,
+        day_name,
+        start_time,
+        end_time,
+        from_date,
+        to_date
+      FROM tbl_class_schedule
+      ORDER BY from_date ASC
+    `);
 
     return res.status(200).json({
       success: true,
@@ -1500,7 +1500,83 @@ export const getScheduleForAdmin = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch schedule"
+      message: "Failed to fetch schedule",
+      error: error.message
+    });
+  }
+};
+
+
+const deleteClassScheduleWithSlots = async (req, res) => {
+  const { schedule_id } = req.body;
+
+  if (!schedule_id) {
+    return res.status(400).json({
+      success: false,
+      message: "schedule_id is required",
+    });
+  }
+
+  try {
+    /* ============================
+       CHECK IF SCHEDULE EXISTS
+    ============================ */
+    const scheduleCheck = await pool.query(
+      `SELECT id FROM tbl_class_schedule WHERE id = $1`,
+      [schedule_id]
+    );
+
+    if (scheduleCheck.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Schedule not found",
+      });
+    }
+
+    /* ============================
+       SAFETY CHECK (OPTIONAL)
+       ❌ DO NOT DELETE IF ANY SLOT IS BOOKED
+    ============================ */
+    const bookedSlots = await pool.query(
+      `SELECT id FROM tbl_class_slots 
+       WHERE schedule_id = $1 AND is_booked = TRUE`,
+      [schedule_id]
+    );
+
+    if (bookedSlots.rowCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete schedule. Some slots are already booked.",
+      });
+    }
+
+    /* ============================
+       DELETE SLOTS FIRST
+    ============================ */
+    await pool.query(
+      `DELETE FROM tbl_class_slots WHERE schedule_id = $1`,
+      [schedule_id]
+    );
+
+    /* ============================
+       DELETE SCHEDULE
+    ============================ */
+    await pool.query(
+      `DELETE FROM tbl_class_schedule WHERE id = $1`,
+      [schedule_id]
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Schedule and all related slots deleted successfully",
+      deleted_schedule_id: schedule_id,
+    });
+
+  } catch (error) {
+    console.error("Delete schedule error:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
     });
   }
 };
@@ -1527,5 +1603,6 @@ export {
   deleteClassSlot,
   updateTopic,
   deleteTopic,
+  deleteClassScheduleWithSlots
   
 };

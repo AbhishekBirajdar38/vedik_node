@@ -26,6 +26,11 @@ import {
   uploadPaymentReceipt,
   publishPaymentReceipt,
   getMyReceipts,
+  getTopicMediaByTopic,
+  updateTopicMedia,
+  deleteTopicMedia,
+  getTopicsByStandard,
+  getAssignedDataByBatch
 } from "../controllers/mediaController.js";
 
 import { authenticate } from "../middlewares/authMiddleware.js";
@@ -118,5 +123,15 @@ router.post(
 router.post("/publishPaymentReceipt", authenticate, publishPaymentReceipt);
 
 router.get("/getMyReceipts", authenticate, getMyReceipts);
+
+router.post("/getTopicMediaByTopic", authenticate, getTopicMediaByTopic);
+
+router.post("/updateTopicMedia", authenticate, upload.any(), updateTopicMedia);
+
+router.post("/deleteTopicMedia", authenticate, deleteTopicMedia);
+
+router.post("/getTopicsByStandard", authenticate, getTopicsByStandard);
+
+router.post("/getAssignedDataByBatch", authenticate, getAssignedDataByBatch);
 
 export default router;

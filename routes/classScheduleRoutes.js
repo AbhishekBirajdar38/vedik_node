@@ -19,7 +19,8 @@ import {
   deleteClassSlot,
   updateTopic,
   deleteTopic,
-  getScheduleForAdmin
+  getScheduleForAdmin,
+  deleteClassScheduleWithSlots
 } from "../controllers/classScheduleController.js";
 
 import { authenticate } from "../middlewares/authMiddleware.js";
@@ -45,6 +46,7 @@ router.post("/updateTopic", authenticate, updateTopic);
 router.post("/deleteTopic", authenticate, deleteTopic);
 router.post("/editClassSchedule", authenticate, editClassSchedule);
 router.post("/getScheduleForAdmin", authenticate, getScheduleForAdmin);
+router.post("/deleteClassScheduleWithSlots", authenticate, deleteClassScheduleWithSlots);
 
 
 export default router;
